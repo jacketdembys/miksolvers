@@ -155,6 +155,15 @@ if __name__ == '__main__':
         elif dataset_type == "seq":
             filename = '../docker/datasets/7DoF-Combined/review_data_'+robot_choice+'_'+str(int(dataset_samples))+'_qlim_scale_'+str(int(scale))+'_seq_'+str(joint_steps)+'.csv'
             data = pd.read_csv(filename)
+    
+    # Load dataset locally only
+    elif load_option == "cloud":
+        if dataset_type == "1_to_1":
+            filename = '/home/datasets/7DoF-Combined/review_data_'+robot_choice+'_'+str(int(dataset_samples))+'_qlim_scale_'+str(int(scale))+'_seq_'+str(joint_steps)+'.csv'
+            data = pd.read_csv(filename) #+'_'+orientation_type+'.csv')
+        elif dataset_type == "seq":
+            filename = '/home/datasets/7DoF-Combined/review_data_'+robot_choice+'_'+str(int(dataset_samples))+'_qlim_scale_'+str(int(scale))+'_seq_'+str(joint_steps)+'.csv'
+            data = pd.read_csv(filename)
    
     data_a = np.array(data) 
     train_data_loader, test_data_loader, X_validate, y_validate, X_train, y_train, X_test, y_test = load_dataset(data_a, n_DoF, batch_size, robot_choice, dataset_type, device, input_dim)
