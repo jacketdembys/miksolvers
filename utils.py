@@ -2582,12 +2582,15 @@ def inference_modified_best_of_k(model, iterator, criterion, device, robot_choic
             # X_errors shape should be [B*K, 6] (xyz + rpy in your code)
             _, _, X_errors_all = reconstruct_pose_modified(y_rep_np, cand_y_np, robot_choice)
 
+            
+
             # ----- Reduce candidate errors to a scalar per candidate -----
             # If X_errors_all is [N,6], make a scalar error per row
             if use_position_only:
                 # position only (xyz)
                 err_scalar = np.linalg.norm(X_errors_all[:, :3], axis=1)  # [B*K]
             else:
+                """
                 # full pose error (xyz + rpy)
                 err_scalar = np.linalg.norm(X_errors_all, axis=1)         # [B*K]
                 #print(X_errors_all)
@@ -2597,6 +2600,16 @@ def inference_modified_best_of_k(model, iterator, criterion, device, robot_choic
                 best_pi = torch.argmax(logits_pi, dim=1)
                 best_pi_np = best_pi.detach().cpu().numpy()
                 #print(best_pi_np)
+                """
+                # X_errors_all: [B*K, 6]  -> [dx, dy, dz, droll, dpitch, dyaw]
+                pos = X_errors_all[:, :3]   # meters
+                rot = X_errors_all[:, 3:]   # radians
+
+                # Paper strategy: 2 rad == 1 m  =>  1 rad == 0.5 m
+                rot_m = 0.5 * rot
+
+                # scalar metric in "meters-equivalent"
+                err_scalar = np.sqrt(np.sum(pos**2, axis=1) + np.sum(rot_m**2, axis=1))  # [B*K]
                 
                 
 

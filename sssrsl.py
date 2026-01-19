@@ -592,7 +592,10 @@ if __name__ == '__main__':
         inference_results_table = wandb.Table(dataframe=df_inference_results)
         wandb.log({"inferences": inference_results_table}, commit=True)
 
-        actifact_name = f"inference_summary_{network_type}_{robot_choice}_{seed_number}"
+        #actifact_name = f"inference_summary_{network_type}_{robot_choice}_{seed_number}"
+        actifact_name = "inference_summary_"+network_type+"_"+robot_choice+"_" \
+                + save_layers_str + "_neurons_" + str(neurons) + "_batch_" + str(batch_size)  +"_" \
+                + optimizer_choice + "_" + loss_choice + "_" + str(experiment_number) + "_qlim_scale_" + str(int(scale)) + "_samples_" + str(dataset_samples) + "_" + dataset_type + "_" + orientation_type + "_" + str(learning_rate) + "_js_" + str(joint_steps) + "_sn_" + {seed_number}
         artifact = wandb.Artifact(actifact_name, type="results")
         path = os.path.join(save_path, f"{actifact_name}.csv")
         df_inference_results.to_csv(path, index=False)
