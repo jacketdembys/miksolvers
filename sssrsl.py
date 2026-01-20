@@ -76,6 +76,7 @@ if __name__ == '__main__':
     learning_rate = config["TRAIN"]["HYPERPARAMETERS"]["LEARNING_RATE"]           # learning rate
     optimizer_choice = config["TRAIN"]["HYPERPARAMETERS"]["OPTIMIZER_NAME"]       # optimizers (SGD, Adam, Adadelta, RMSprop)
     loss_choice =  config["TRAIN"]["HYPERPARAMETERS"]["LOSS"]                     # l2, l1, lfk
+    K =  config["TRAIN"]["HYPERPARAMETERS"]["MDN_K"]
     network_type =  config["MODEL"]["NAME"] 
     num_blocks =  config["MODEL"]["NUM_BLOCKS"]     
     dataset_samples = config["TRAIN"]["DATASET"]["NUM_SAMPLES"]                   # MLP, ResMLP, DenseMLP, FouierMLP 
@@ -221,11 +222,11 @@ if __name__ == '__main__':
         scale = 10
         model = FourierMLP(input_dim, fourier_dim, hidden_layer_sizes, output_dim, scale)
     elif network_type == "MDNMLP":
-        K = config.get("MDN_K", 100)
+        #K = config.get("MDN_K", 100)
         model = MDNMLP(input_dim, hidden_layer_sizes, output_dim, K=K).to(device)
         save_layers_str = "blocks_"+ str(num_blocks)+"_layers_"+ str(layers)
     elif network_type == "ResMDNMLP":
-        K = config.get("MDN_K", 100)
+        #K = config.get("MDN_K", 100)
         model = ResMDNMLPSum(input_dim, neurons, output_dim, num_blocks, K=K).to(device)
         save_layers_str = "blocks_"+ str(num_blocks)+"_layers_"+ str(layers)
         print(f"Using MDN with K = {model.K}")
@@ -282,7 +283,7 @@ if __name__ == '__main__':
     # Save results on local path
     save_path = "results_best_"+str(K)+"/"+robot_choice+"/"+network_type+"_"+robot_choice+"_" \
                 + save_layers_str + "_neurons_" + str(neurons) + "_batch_" + str(batch_size)  +"_" \
-                +optimizer_choice+"_"+loss_choice+"_"+str(experiment_number)+'_qlim_scale_'+str(int(scale))+'_samples_'+str(dataset_samples)+"_"+dataset_type+"_"+orientation_type+"_"+str(learning_rate)+"_js_"+str(joint_steps)
+                +optimizer_choice+"_"+loss_choice+"_"+str(experiment_number)+'_qlim_scale_'+str(int(scale))+'_samples_'+str(dataset_samples)+"_"+dataset_type+"_"+orientation_type+"_"+str(learning_rate)+"_js_"+str(joint_steps) + "_sn_" + str(seed_number)+ "_K_" + str(K)
 
     if not os.path.exists(save_path):
         os.makedirs(save_path)
@@ -291,11 +292,11 @@ if __name__ == '__main__':
     if save_option == "cloud":
         run = wandb.init(
             entity="jacketdembys",
-            project = "ik-iros26",                
+            project = "ik-iros-26",                
             group = network_type+"_"+"Dataset_"+str(dataset_samples)+"_Scale_"+str(int(scale))+"_"+dataset_type+"_"+loss_choice,  # "_seq", "_1_to_1"
             name = "Model_"+robot_choice+"_" \
                     + save_layers_str + "_neurons_" + str(neurons) + "_batch_" + str(batch_size) +"_" \
-                    +optimizer_choice+"_"+loss_choice+"_run_"+str(experiment_number)+'_qlim_scale_'+str(int(scale))+'_samples_'+str(dataset_samples)+"_"+orientation_type+"_"+str(learning_rate)+"_js_"+str(joint_steps)   #+'_non_traj_split', '_traj_split'   
+                    +optimizer_choice+"_"+loss_choice+"_run_"+str(experiment_number)+'_qlim_scale_'+str(int(scale))+'_samples_'+str(dataset_samples)+"_"+orientation_type+"_"+str(learning_rate)+"_js_"+str(joint_steps) + "_sn_" + str(seed_number)+ "_K_" + str(K)   #+'_non_traj_split', '_traj_split'   
         )
 
     
@@ -370,14 +371,15 @@ if __name__ == '__main__':
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': train_loss,
                     }, save_path+'/best_epoch.pt')
-                """
+                
+                ## Save best artifact epoch on Wandb
                 artifact = wandb.Artifact(name="Model_"+robot_choice+"_" \
                                                 +model.name.replace(" ","").replace("[","_").replace("]","_").replace(",","-") \
                                                 +optimizer_choice+"_"+loss_choice+"_"+str(experiment_number+1)+'_qlim_scale_'+str(int(scale)), 
                                             type='model')
                 artifact.add_file(save_path+'/best_epoch.pth')
                 run.log_artifact(artifact)
-                """
+                
                 
 
         else:
@@ -463,10 +465,10 @@ if __name__ == '__main__':
         block_config = block_config.squeeze(0).astype(int).tolist()
         model = DenseNet(input_dim, neurons, block_config, output_dim).to(device)
     elif network_type == "MDNMLP":
-        K = config.get("MDN_K", 100)
+        #K = config.get("MDN_K", 100)
         model = MDNMLP(input_dim, hidden_layer_sizes, output_dim, K=K).to(device)
     elif network_type == "ResMDNMLP":
-        K = config.get("MDN_K", 100)
+        #K = config.get("MDN_K", 100)
         model = ResMDNMLPSum(input_dim, neurons, output_dim, num_blocks, K=K).to(device)
         
 
@@ -595,13 +597,15 @@ if __name__ == '__main__':
         #actifact_name = f"inference_summary_{network_type}_{robot_choice}_{seed_number}"
         actifact_name = "inference_summary_"+network_type+"_"+robot_choice+"_" \
                 + save_layers_str + "_neurons_" + str(neurons) + "_batch_" + str(batch_size)  +"_" \
-                + optimizer_choice + "_" + loss_choice + "_" + str(experiment_number) + "_qlim_scale_" + str(int(scale)) + "_samples_" + str(dataset_samples) + "_" + dataset_type + "_" + orientation_type + "_" + str(learning_rate) + "_js_" + str(joint_steps) + "_sn_" + {seed_number}
+                + optimizer_choice + "_" + loss_choice + "_" + str(experiment_number) + "_qlim_scale_" + str(int(scale)) + "_samples_" + str(dataset_samples) + "_" + dataset_type + "_" + orientation_type + "_" + str(learning_rate) + "_js_" + str(joint_steps) + "_sn_" + str(seed_number)+ "_K_" + str(K)
         artifact = wandb.Artifact(actifact_name, type="results")
         path = os.path.join(save_path, f"{actifact_name}.csv")
         df_inference_results.to_csv(path, index=False)
         artifact.add_file(path)
         wandb.log_artifact(artifact)
 
+
+        """
         def to_py(x):
             # pandas -> python
             if isinstance(x, pd.Series):
@@ -627,6 +631,7 @@ if __name__ == '__main__':
         clean = {k: to_py(v) for k, v in df_inference_results.items()}
         wandb.run.summary.update(clean)
         #wandb.log({"_summary_flush": 1})
+        """
 
         
 
