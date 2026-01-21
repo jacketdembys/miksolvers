@@ -481,8 +481,8 @@ if __name__ == '__main__':
     
     # get the results from training    
     with torch.no_grad():
-        #results = inference_modified(model, test_data_loader, criterion, device, robot_choice)
-        results = inference_modified_best_of_k(model, test_data_loader, criterion, device, robot_choice)
+        results = inference_modified(model, test_data_loader, criterion, device, robot_choice)
+        #results = inference_modified_best_of_k(model, test_data_loader, criterion, device, robot_choice)
     X_errors = results["X_errors_report"]
 
     # get some inference stats
