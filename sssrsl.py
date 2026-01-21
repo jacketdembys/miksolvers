@@ -581,6 +581,7 @@ if __name__ == '__main__':
             "ya_percent_3(deg)": Ya_percentile[2],
             "ya_percent_4(deg)": Ya_percentile[3],
             "ya_percent_5(deg)": Ya_percentile[4],
+            "mdn_k": K,
         }
 
         ## Old versions to log results
