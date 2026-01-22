@@ -150,7 +150,7 @@ config_info = {
             'EPS': 0.00001,
             'WEIGHT_DECAY': 0.0,
             'WEIGHT_INITIALIZATION': 'default',
-            'LOSS': 'mdn',           # lq, ld, mdn
+            'LOSS': 'lq',           # lq, ld, mdn
             'MDN_K': 5,
         },
         'PRINT_EPOCHS': True,
