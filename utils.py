@@ -1733,15 +1733,12 @@ def train(model, iterator, optimizer, criterion, criterion_type, batch_size, dev
             x = x.to(device)
             y = y.to(device)   
 
-            print("mdnh")
 
             if (criterion_type == "mdn") or (criterion_type == "mdnh"):
-                print("here 1")
                 y_pred, mdn_params = model(x)
                 y_pred = torch.nan_to_num(y_pred, nan=0.0)
                 loss = criterion(mdn_params, y)
             else:        
-                print("here 2")
                 y_pred, _ = model(x)
                 y_pred = torch.nan_to_num(y_pred, nan=0.0)
                 loss = criterion(y_pred, y)
