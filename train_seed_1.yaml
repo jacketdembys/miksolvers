@@ -29,6 +29,7 @@ TRAIN:
     EPS: 1.0e-05
     LEARNING_RATE: 0.0001
     LOSS: mdn
+    MDN_K: 100
     NUM_WORKERS: 4
     OPTIMIZER_NAME: Adam
     PERSISTENT_WORKERS: true

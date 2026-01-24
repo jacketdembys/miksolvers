@@ -2641,6 +2641,10 @@ def inference_modified_best_of_k(model, iterator, criterion, device, robot_choic
 
     # Recompute pose errors for the selected best predictions (your normal pipeline)
     X_desireds, X_preds, X_errors = reconstruct_pose_modified(y_desireds, y_preds, robot_choice)
+    print(X_preds.shape)
+    print(y_desireds.shape)
+    print(y_preds.shape)
+    sys.exit()
 
     X_errors_report = np.array([[X_errors.min(axis=0)],
                                 [X_errors.mean(axis=0)],
@@ -2664,6 +2668,351 @@ def inference_modified_best_of_k(model, iterator, criterion, device, robot_choic
     return results
 
 
+
+def inference_modified_return_all_k(
+    model,
+    iterator,
+    criterion,
+    device,
+    robot_choice,
+    use_position_only=False,
+):
+    """
+    MDN inference returning ALL K IK solutions (mu) per sample, plus best-of-K selection.
+
+    IMPORTANT: reconstruct_pose_modified(...) returns X_des_flat and X_preds_flat as (B*K, D+6)
+    because it concatenates [X,Y,Z,R,P,Y] + [q1..qD] per row. We therefore reshape using (D+6)
+    and slice the first 6 columns as pose.
+
+    Returns:
+      y_preds_all        : (N, K, D)   all IK joint solutions (anchors)
+      y_desireds         : (N, D)      ground-truth joints
+      y_desireds_all     : (N, K, D)   ground-truth joints replicated
+
+      X_preds_all        : (N, K, 6)   FK poses (xyz+rpy) for each IK solution
+      X_desireds         : (N, 6)      desired poses
+      X_desireds_all     : (N, K, 6)   desired poses replicated
+
+      X_errors_all       : (N, K, 6)   pose errors per IK solution (m/rad)
+      err_scalar_all     : (N, K)      scalar pose error used for selection
+      best_k             : (N,)        index of best candidate per sample
+
+      y_preds            : (N, D)      best-of-K joint solution
+      X_preds            : (N, 6)      FK pose of best-of-K
+      X_errors           : (N, 6)      pose errors of best-of-K
+      X_errors_report    : (4, 6)      min/mean/max/std over test set (best-of-K)
+    """
+    model.eval()
+
+    # ---- Accumulators ----
+    y_desireds_list = []
+
+    y_preds_all_list = []        # (B,K,D)
+    X_preds_all_list = []        # (B,K,6)
+    X_errors_all_list = []       # (B,K,6)
+    err_scalar_all_list = []     # (B,K)
+    best_k_list = []             # (B,)
+    y_best_list = []             # (B,D)
+
+    with torch.no_grad():
+        for data in tqdm(iterator):
+            x = data["input"].to(device)      # (B, input_dim)
+            y = data["output"].to(device)     # (B, D)
+
+            # Forward pass (MDN)
+            _, mdn_params = model(x)
+            logits_pi, mu, log_sigma = mdn_params   # mu: (B,K,D)
+            B, K, D = mu.shape
+
+            # ---- Candidate joints ----
+            cand_y = mu.reshape(B * K, D)            # (B*K, D)
+            y_rep = y.unsqueeze(1).expand(B, K, D).reshape(B * K, D)  # (B*K, D)
+
+            cand_y_np = cand_y.detach().cpu().numpy()
+            y_rep_np = y_rep.detach().cpu().numpy()
+
+            # ---- FK + pose error for all candidates ----
+            # X_des_flat and X_preds_flat are (B*K, D+6) (pose + joints)
+            X_des_flat, X_preds_flat, X_errors_flat = reconstruct_pose_modified(
+                y_rep_np, cand_y_np, robot_choice
+            )
+
+            X_des_flat = np.asarray(X_des_flat)
+            X_preds_flat = np.asarray(X_preds_flat)
+            X_errors_flat = np.asarray(X_errors_flat)
+
+            # last_dim should be D+6
+            last_dim = X_preds_flat.shape[-1]
+
+            # Reshape pose+joints to (B,K,D+6)
+            X_des_k_full = X_des_flat.reshape(B, K, last_dim)
+            X_preds_k_full = X_preds_flat.reshape(B, K, last_dim)
+
+            # Slice pose only (first 6)
+            X_des_k = X_des_k_full[:, :, :6]     # (B,K,6)
+            X_preds_k = X_preds_k_full[:, :, :6] # (B,K,6)
+
+            # Errors might be (B*K,6) or (B*K,D+6); handle both robustly then slice pose part
+            if X_errors_flat.ndim == 2 and X_errors_flat.shape[1] == 6:
+                X_errors_k = X_errors_flat.reshape(B, K, 6)
+            else:
+                X_errors_k = X_errors_flat.reshape(B, K, last_dim)[:, :, :6]
+
+            # ---- Scalar error (for best-of-K) ----
+            if use_position_only:
+                # Position only (meters)
+                pos = X_errors_k[:, :, :3]
+                err_scalar = np.linalg.norm(pos, axis=2)  # (B,K)
+            else:
+                # Position + orientation with unit matching: 2 rad == 1 m
+                pos = X_errors_k[:, :, :3]          # meters
+                rot = X_errors_k[:, :, 3:]          # radians
+                rot_m = 0.5 * rot                   # meters-equivalent
+                err_scalar = np.sqrt(
+                    np.sum(pos**2, axis=2) + np.sum(rot_m**2, axis=2)
+                )                                   # (B,K)
+
+            # ---- Best-of-K selection ----
+            best_k = np.argmin(err_scalar, axis=1)   # (B,)
+
+            # Gather best joints from mu
+            mu_np = mu.detach().cpu().numpy()        # (B,K,D)
+            y_best = mu_np[np.arange(B), best_k, :]  # (B,D)
+
+            # ---- Accumulate ----
+            y_desireds_list.append(y.detach().cpu().numpy())
+
+            y_preds_all_list.append(mu_np)       # (B,K,D)
+            X_preds_all_list.append(X_preds_k)   # (B,K,6)
+            X_errors_all_list.append(X_errors_k) # (B,K,6)
+            err_scalar_all_list.append(err_scalar)
+            best_k_list.append(best_k)
+            y_best_list.append(y_best)
+
+    # ---- Stack across batches ----
+    y_desireds = np.concatenate(y_desireds_list, axis=0)           # (N,D)
+    y_preds_all = np.concatenate(y_preds_all_list, axis=0)         # (N,K,D)
+    X_preds_all = np.concatenate(X_preds_all_list, axis=0)         # (N,K,6)
+    X_errors_all = np.concatenate(X_errors_all_list, axis=0)       # (N,K,6)
+    err_scalar_all = np.concatenate(err_scalar_all_list, axis=0)   # (N,K)
+    best_k = np.concatenate(best_k_list, axis=0)                   # (N,)
+    y_preds = np.concatenate(y_best_list, axis=0)                  # (N,D)
+
+    # ---- Desired replicated ----
+    K = y_preds_all.shape[1]
+    y_desireds_all = np.repeat(y_desireds[:, None, :], K, axis=1)  # (N,K,D)
+
+    # ---- Recompute FK for best-of-K (standard reporting) ----
+    X_desireds, X_preds, X_errors = reconstruct_pose_modified(
+        y_desireds, y_preds, robot_choice
+    )
+
+    # X_desireds might also be (N, D+6) depending on your reconstruct_pose_modified; slice pose
+    X_desireds = np.asarray(X_desireds)
+    X_preds = np.asarray(X_preds)
+    X_errors = np.asarray(X_errors)
+
+    # If X_desireds includes joints too, slice first 6
+    if X_desireds.ndim == 2 and X_desireds.shape[1] >= 6:
+        X_desireds_pose = X_desireds[:, :6]
+    else:
+        X_desireds_pose = X_desireds
+
+    if X_preds.ndim == 2 and X_preds.shape[1] >= 6:
+        X_preds_pose = X_preds[:, :6]
+    else:
+        X_preds_pose = X_preds
+
+    if X_errors.ndim == 2 and X_errors.shape[1] >= 6:
+        X_errors_pose = X_errors[:, :6]
+    else:
+        X_errors_pose = X_errors
+
+    X_desireds_all = np.repeat(X_desireds_pose[:, None, :], K, axis=1)  # (N,K,6)
+
+    X_errors_report = np.array([
+        X_errors_pose.min(axis=0),
+        X_errors_pose.mean(axis=0),
+        X_errors_pose.max(axis=0),
+        X_errors_pose.std(axis=0),
+    ])
+
+    # ---- Final results ----
+    results = {
+        # Joint space
+        "y_preds_all": y_preds_all,              # (N,K,D)
+        "y_desireds": y_desireds,                # (N,D)
+        "y_desireds_all": y_desireds_all,        # (N,K,D)
+
+        # Task space (pose only: 6D)
+        "X_preds_all": X_preds_all,              # (N,K,6)
+        "X_desireds": X_desireds_pose,           # (N,6)
+        "X_desireds_all": X_desireds_all,        # (N,K,6)
+        "X_errors_all": X_errors_all,            # (N,K,6)
+        "err_scalar_all": err_scalar_all,        # (N,K)
+
+        # Best-of-K
+        "best_k": best_k,                        # (N,)
+        "y_preds": y_preds,                      # (N,D)
+        "X_preds": X_preds_pose,                 # (N,6)
+        "X_errors": X_errors_pose,               # (N,6)
+        "X_errors_report": X_errors_report,      # (4,6)
+
+        "best_of_k": True,
+        "K": int(K),
+    }
+
+    return results
+
+
+
+def print_inference_results(results, max_k_show=5, precision=4):
+    np.set_printoptions(precision=precision, suppress=True)
+
+    print("\n" + "="*80)
+    print("INFERENCE RESULTS SUMMARY")
+    print("="*80)
+
+    print(f"Best-of-K enabled: {results.get('best_of_k', False)}")
+    print(f"K (number of IK candidates): {results.get('K', 'N/A')}")
+    print("-"*80)
+
+    # --------------------
+    # Joint space
+    # --------------------
+    print("\n[JOINT SPACE]")
+    print("-"*40)
+
+    y_preds_all = results["y_preds_all"]
+    y_desireds = results["y_desireds"]
+    y_desireds_all = results["y_desireds_all"]
+    y_preds = results["y_preds"]
+
+    print(f"y_preds_all      shape: {y_preds_all.shape}  (N,K,D)")
+    print(f"y_desireds       shape: {y_desireds.shape}   (N,D)")
+    print(f"y_desireds_all   shape: {y_desireds_all.shape} (N,K,D)")
+    print(f"y_preds (best)   shape: {y_preds.shape}      (N,D)")
+
+    print("\nExample (sample 0):")
+    print("  y_desireds[0]:")
+    print("   ", y_desireds[0])
+
+    print(f"\n  y_preds_all[0, :{max_k_show}]:")
+    for k in range(min(max_k_show, y_preds_all.shape[1])):
+        print(f"    k={k}: {y_preds_all[0, k]}")
+
+    # --------------------
+    # Task space
+    # --------------------
+    print("\n[TASK SPACE]")
+    print("-"*40)
+
+    X_preds_all = results["X_preds_all"]
+    X_desireds = results["X_desireds"]
+    X_desireds_all = results["X_desireds_all"]
+    X_errors_all = results["X_errors_all"]
+    err_scalar_all = results["err_scalar_all"]
+    X_preds = results["X_preds"]
+    X_errors = results["X_errors"]
+
+    print(f"X_preds_all      shape: {X_preds_all.shape}   (N,K,6)")
+    print(f"X_desireds       shape: {X_desireds.shape}    (N,6)")
+    print(f"X_desireds_all   shape: {X_desireds_all.shape} (N,K,6)")
+    print(f"X_errors_all     shape: {X_errors_all.shape}  (N,K,6)")
+    print(f"err_scalar_all   shape: {err_scalar_all.shape} (N,K)")
+    print(f"X_preds (best)   shape: {X_preds.shape}       (N,6)")
+    print(f"X_errors (best)  shape: {X_errors.shape}      (N,6)")
+
+    print("\nExample (sample 0):")
+    print("  X_desireds[0] (xyz rpy):")
+    print("   ", X_desireds[0])
+
+    print(f"\n  X_preds_all[0, :{max_k_show}] (xyz rpy):")
+    for k in range(min(max_k_show, X_preds_all.shape[1])):
+        print(f"    k={k}: {X_preds_all[0, k]}")
+
+    print(f"\n  X_errors_all[0, :{max_k_show}] (dx dy dz dR dP dY):")
+    for k in range(min(max_k_show, X_errors_all.shape[1])):
+        print(f"    k={k}: {X_errors_all[0, k]}")
+
+    # --------------------
+    # Best-of-K
+    # --------------------
+    print("\n[BEST-OF-K SELECTION]")
+    print("-"*40)
+
+    best_k = results["best_k"]
+
+    print(f"best_k shape: {best_k.shape}")
+    print(f"best_k[0]: {best_k[0]}")
+
+    print("\nBest solution (sample 0):")
+    print("  y_preds[0]:")
+    print("   ", y_preds[0])
+    print("  X_preds[0]:")
+    print("   ", X_preds[0])
+    print("  X_errors[0]:")
+    print("   ", X_errors[0])
+
+    # --------------------
+    # Global error stats
+    # --------------------
+    print("\n[GLOBAL ERROR STATISTICS] (best-of-K)")
+    print("-"*40)
+
+    X_errors_report = results["X_errors_report"]
+    labels = ["min", "mean", "max", "std"]
+    dof_labels = ["x", "y", "z", "roll", "pitch", "yaw"]
+
+    for i, stat in enumerate(labels):
+        vals = X_errors_report[i]
+        s = ", ".join([f"{d}:{vals[j]:.4f}" for j, d in enumerate(dof_labels)])
+        print(f"{stat:>4}: {s}")
+
+    print("\n" + "="*80 + "\n")
+
+    
+        # --------------------
+    # Rank K solutions by pose error (sample 0)
+    # --------------------
+    print("\n[RANKING OF K IK SOLUTIONS — SAMPLE 0]")
+    print("-"*40)
+
+    X_errors_all = results["X_errors_all"]   # (N,K,6)
+    K = results["K"]
+
+    # Select sample 0
+    X_err_k = X_errors_all[0]                # (K,6)
+
+    # Convert units
+    pos_mm = X_err_k[:, :3] * 1000.0          # meters -> mm
+    ori_deg = np.rad2deg(X_err_k[:, 3:])      # radians -> degrees
+
+    # Mean errors
+    mean_pos_err = pos_mm.mean(axis=1)        # (K,)
+    mean_ori_err = ori_deg.mean(axis=1)       # (K,)
+
+    # Combined score (simple additive metric)
+    lambda_ori = 1.0  # weight for orientation (adjust if needed)
+    combined_score = mean_pos_err + lambda_ori * mean_ori_err
+
+    # Sort by combined score (lower is better)
+    order = np.argsort(combined_score)
+
+    print(f"{'Rank':>4} | {'k':>2} | {'Pos err (mm)':>12} | {'Ori err (deg)':>14} | {'Score':>10}")
+    print("-"*60)
+
+    for r, k in enumerate(order):
+        print(f"{r+1:>4} | {k:>2} | "
+              f"{mean_pos_err[k]:>12.4f} | "
+              f"{mean_ori_err[k]:>14.4f} | "
+              f"{combined_score[k]:>10.4f}")
+
+    # Highlight best-of-K choice
+    best_k = results["best_k"][0]
+    print("\nBest-of-K selected index:", best_k)
+    print("Best-of-K position error (mm):", mean_pos_err[best_k])
+    print("Best-of-K orientation error (deg):", mean_ori_err[best_k])
 
 
 
@@ -3497,6 +3846,54 @@ class MDNLoss(nn.Module):
         log_mix = torch.logsumexp(log_pi + log_prob, dim=1)  # [B]
         nll = -log_mix.mean()
         return nll
+
+
+
+class MDNLossEntropy(nn.Module):
+    """
+    L = L_MDN - lambda_ent * H(pi)
+
+    - L_MDN is the usual MDN negative log-likelihood.
+    - H(pi) is the entropy of mixture weights, encouraging non-collapsed usage.
+    """
+    def __init__(self, eps=1e-8, lambda_ent=1e-3, clamp_log_sigma=(-10.0, 10.0)):
+        super().__init__()
+        self.eps = eps
+        self.lambda_ent = float(lambda_ent)
+        self.clamp_log_sigma = clamp_log_sigma
+
+    def forward(self, mdn_params, y):
+        logits_pi, mu, log_sigma = mdn_params  # [B,K], [B,K,D], [B,K,D]
+        y = y.unsqueeze(1)                     # [B,1,D] broadcast against K
+
+        # ---- Gaussian log-likelihood per component ----
+        log_sigma = torch.clamp(log_sigma, min=self.clamp_log_sigma[0], max=self.clamp_log_sigma[1])
+        sigma2 = torch.exp(2.0 * log_sigma)
+
+        log_prob = -0.5 * (
+            ((y - mu) ** 2) / (sigma2 + self.eps)
+            + 2.0 * log_sigma
+            + math.log(2.0 * math.pi)
+        )
+        log_prob = log_prob.sum(dim=2)         # [B,K]
+
+        log_pi = F.log_softmax(logits_pi, dim=1)  # [B,K]
+
+        # ---- Mixture log-likelihood via logsumexp ----
+        log_mix = torch.logsumexp(log_pi + log_prob, dim=1)  # [B]
+        nll = -log_mix.mean()
+
+        # ---- Entropy regularization on pi ----
+        # pi = softmax(logits_pi), H(pi) = -sum pi log(pi)
+        pi = torch.softmax(logits_pi, dim=1)                 # [B,K]
+        entropy = -(pi * (log_pi)).sum(dim=1).mean()         # scalar
+
+        # Minimize: nll - lambda * entropy  (so entropy is maximized)
+        loss = nll - self.lambda_ent * entropy
+
+        # Optional: return diagnostics for logging
+        return loss
+
 
 
 

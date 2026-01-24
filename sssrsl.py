@@ -273,6 +273,8 @@ if __name__ == '__main__':
         criterion = FKLoss(robot_choice=robot_choice, device=device)
     elif loss_choice == "mdn":
         criterion = MDNLoss()
+    elif loss_choice == "mdnh":
+        criterion = MDNLossEntropy()
 
 
 
