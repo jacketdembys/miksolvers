@@ -1733,7 +1733,7 @@ def train(model, iterator, optimizer, criterion, criterion_type, batch_size, dev
             x = x.to(device)
             y = y.to(device)   
 
-            if criterion_type == "mdn":
+            if criterion_type == "mdn" or criterion_type == "mdnh":
                 y_pred, mdn_params = model(x)
                 y_pred = torch.nan_to_num(y_pred, nan=0.0)
                 loss = criterion(mdn_params, y)
