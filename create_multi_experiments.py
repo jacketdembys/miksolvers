@@ -151,7 +151,7 @@ config_info = {
             'WEIGHT_DECAY': 0.0,
             'WEIGHT_INITIALIZATION': 'default',
             'LOSS': 'mdnh',           # lq, ld, mdn, mdnh
-            'MDN_K': 10,
+            'MDN_K': 5,
         },
         'PRINT_EPOCHS': True,
         'PRINT_STEPS': 100
