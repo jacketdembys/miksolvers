@@ -3857,7 +3857,7 @@ class MDNLossEntropy(nn.Module):
     - L_MDN is the usual MDN negative log-likelihood.
     - H(pi) is the entropy of mixture weights, encouraging non-collapsed usage.
     """
-    def __init__(self, eps=1e-8, lambda_ent=1e-3, clamp_log_sigma=(-10.0, 10.0)):
+    def __init__(self, eps=1e-8, lambda_ent=1e-2, clamp_log_sigma=(-10.0, 10.0)):
         super().__init__()
         self.eps = eps
         self.lambda_ent = float(lambda_ent)
